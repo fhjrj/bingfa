@@ -366,3 +366,65 @@ pthread_detach(t_id);
     close(serv_sock);
     return 0;
 }
+
+/*
+#include <iostream>
+#include <mysql/mysql.h>
+#include <string>
+using std::string;
+int main(){
+    
+    MYSQL* mysql=mysql_init(nullptr);
+    if(mysql==nullptr)
+    {
+        std::cout<<"mysql error"<<std::endl;
+    }else{
+        std::cout<<"mysql init success"<<std::endl;
+    }
+    string host="127.0.0.1";
+    string user="root";
+    string passwd="123456";//登录密码
+    string db="itcast";
+    unsigned int port=3306;
+    if(mysql_real_connect(mysql,host.c_str(),user.c_str(),passwd.c_str(),db.c_str(),port,nullptr,0)==nullptr)
+    {
+        std::cout<<" connect mysql err"<<std::endl;
+    }else{
+        std::cout<<"connect mysql success"<<std::endl;
+    }
+
+    string pt="create table text(id int comment '名字',namse varchar(20) comment '名字')";//不用进行打;
+    int ret=0;
+    ret=mysql_query(mysql,pt.c_str());
+    if(ret==0) std::cout<<"query success"<<std::endl;
+    else std::cout<<"qurey error"<<std::endl;
+
+    pt="insert into text values(1,'66'),(2,'tete'),(3,'775'),(4,'halo')";
+    mysql_query(mysql,pt.c_str());
+    pt="select * from text";
+     mysql_query(mysql,pt.c_str());
+    
+    MYSQL_RES* res=mysql_store_result(mysql);//获得储存结果，结果集,调用此函数前必须要调用SYSQL的select查询命令，才能执行成功
+    int n=mysql_num_rows(res);//结果多少行
+    int m=mysql_num_fields(res);//多少列
+    std::cout<<"行 :"<<n<<std::endl;
+    std::cout<<"列 :"<<m<<std::endl;
+    
+    MYSQL_FIELD* ans=mysql_fetch_field(res);//获取每一列的属性
+    for(int i=0;i<m;i++){
+        std::cout<<ans[i].name<<std::endl;//打印出来就是列的结果 上面在MYSQL中存入了id namse两列，所以这里打出来就是id,namse
+    }
+      for(int i=0;i<n;i++){
+       MYSQL_ROW ROW=mysql_fetch_row(res);//获得每一行的属性， ROW相当于是一个二维数组
+        for(int j=0;j<m;j++)
+        {
+            std::cout<<ROW[j]<<std::endl;
+        }
+      }
+
+    mysql_close(mysql);
+
+
+}
+//MYSQL中判断是否为空用 is NULL
+*/
