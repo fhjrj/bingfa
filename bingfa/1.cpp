@@ -428,3 +428,224 @@ int main(){
 }
 //MYSQL中判断是否为空用 is NULL
 */
+#include <iostream>
+#include <thread>
+#include <mutex>
+#include <future>
+#include <atomic>
+#include <queue>
+#include <vector>
+#include <condition_variable>
+#include <memory>
+#include <functional>
+#include "blockqueue.h"
+
+
+    class threadpool{
+      private:
+       threadpool(const threadpool&)=delete;
+       threadpool& operator=(const threadpool&)=delete;
+       
+       using Task=std::packaged_task<void()>;
+       std::atomic<int> thread_num_;
+       std::queue<Task> tasks_;
+       std::vector<std::thread>  pool_;
+       std::atomic<bool> stop_;
+       std::mutex cv_mt_;
+       std::condition_variable cv_lock_;
+
+   //插入的线程是一个λ表达式，在线程池未停止服务前，一直从队列中窃取任务，无任务则挂起
+       void start(){
+           for(int i=0;i<thread_num_;i++){
+              pool_.emplace_back([this](){
+                   while(!this->stop_.load()){
+                    Task task;
+                    {
+                   std::unique_lock<std::mutex> cv_mt(cv_mt_);
+                  this->cv_lock_.wait(cv_mt,[this]{
+                     return this->stop_.load()||!this->tasks_.empty();//插入任务 当前线程若列对为空，就挂起，若停止服务 继续往下走
+                  });
+
+                  if(this->tasks_.empty())//此情况是 在退出情况下，即stop_=true 停止服务 再次查看是否为空 不为空 把剩下的任务执行完毕
+                    return ;
+                  task=std::move(this->tasks_.front());
+                  this->tasks_.pop();
+                    }
+                    this->thread_num_--;
+                    task();//执行函数
+                    this->thread_num_++;
+                   }
+              });
+           }
+       }
+
+
+       void stop(){
+        stop_.store(true);
+        cv_lock_.notify_all();
+        for(auto& td:pool_){
+          if(td.joinable()){
+            std::cout<<"join thread "<<td.get_id()<<std::endl;
+            td.join();
+          }
+        }
+       }
+       
+
+      public:
+        static threadpool& instance(){
+          static threadpool ins;
+          return ins;
+        }
+
+          threadpool(unsigned int num=std::thread::hardware_concurrency()):stop_(false){
+         if(num<=1){
+         thread_num_=2;
+       }else{
+         thread_num_=num;
+       }
+         start();
+       }
+
+          ~threadpool(){
+        stop();
+      }
+
+      template<class F,class... Args>
+       auto commit(F&& f,Args&&... args)->//下面才是函数主题
+        std::future<decltype(std::forward<F>(f)(std::forward<Args>(args)...))>{
+          using RetType=decltype(std::forward<F>(f)(std::forward<Args>(args)...));//函数和参数都进行原样转发 推断返回类型
+          if(stop_.load()){
+            return std::future<RetType>{};
+          }
+          auto task=std::make_shared<std::packaged_task<RetType()>>(
+            std::bind(std::forward<F>(f),std::forward<Args>(args)...));
+            std::future<RetType> ret=task->get_future();
+            {
+              std::lock_guard<std::mutex> cv_mt(cv_mt_);
+             tasks_.emplace([task](){
+            (*task());
+             });
+            }
+            cv_lock_.notify_one();
+            return ret;
+        }
+       
+    };
+
+/*轮训线程池*/
+
+class function_war {
+	struct impl_base {
+		virtual void call() = 0;
+		virtual ~impl_base() {};
+	};
+	std::unique_ptr<impl_base> impl;
+	template<typename F>
+	struct impl_type :impl_base {
+		F f;
+		impl_type(F&& f_) :f(std::move(f_)) {}//函数转移到此种去进行调用
+		void call() {
+			f();
+		}
+	};
+public:
+	template<typename F>
+	function_war(F&& f) :impl(new impl_type<F>(std::move(f))) {}//多态，利用智能指针指向子类 直接调用子类构造
+	void operator()() {
+		impl->call();//
+	}
+
+	function_war() = default;
+	function_war(function_war&& other): impl(std::move(other.impl)) {}
+	function_war& operator=(function_war&& other){
+		impl = std::move(other.impl);
+		return *this;
+	}
+
+	function_war(function_war const&) = delete;
+	function_war& operator=(function_war const&) = delete;
+
+};
+
+class join_threads {
+	std::vector<std::thread>& threads;
+public:
+	explicit join_threads(std::vector<std::thread>& threads_): threads(threads_){}
+	~join_threads() {
+		for (unsigned long i = 0; i < threads.size(); i++) {
+			if (threads[i].joinable()) {
+				threads[i].join();
+			}
+		}
+	}
+
+};
+
+
+class Threadpool {
+private:
+	std::atomic<bool> done;
+	threadsafe_queue<function_war> workqueue;
+	std::vector<std::thread> threads;
+	join_threads joiner;
+	void work_thread() {
+		while (!done) {
+			function_war task;
+			if (workqueue.try_pop_head(task)) {
+				task();
+			}
+			else {
+				std::this_thread::yield();
+			}
+		}
+	}
+
+public:
+
+	Threadpool() :done(false), joiner(threads) {
+		unsigned const thread_num = std::thread::hardware_concurrency();
+		try {
+			for (int unsigned i = 0; i < thread_num; i++) {
+				threads.push_back(std::thread(&Threadpool::work_thread, this));
+			}
+		}
+		catch (...) {
+			done = true;
+			throw;
+		}
+	}
+
+	static Threadpool& instance() {
+		static  Threadpool pool;
+		return pool;
+	}
+	~Threadpool()
+	{
+		done = true;/*调用join_threads的析构函数*/
+	}
+	/*std::result<functiontype()>在模板会被推到为函数实例f()，不接受参数类型函数，返回值不知道,注意要有括号才能被推到为函数实例 而std::result<function()>::type为其运行结果*/
+	/*f()就包装在std::result<functiontype()>中*/
+	template<typename FunctionType>//std::result类似于decltype,对类型进行推导，然后存在type内
+	std::future<typename std::result_of<FunctionType()>::type>
+		submit(FunctionType f)
+	{
+		typedef typename std::result_of<FunctionType()>::type result_type;
+		std::packaged_task<result_type()> task(std::move(f));   //封装为std::package_task，与std::promise类似 只支持为std::move,
+		std::future<result_type> res(task.get_future());
+		workqueue.push(std::move(task));//传输task时 调用function_war的构造函数，构造且将函数移动给impl_type中的F f,即std::package_task<result_type()>类，调用function_war a() 重载了括号，其就会进行调用
+		return res;
+	}
+};
+
+void test(){
+  int a=0;
+  a++;
+  std::cout<<a<<std::endl;
+}
+int main() {
+	auto p=Threadpool::instance().submit(test);
+	auto u= Threadpool::instance().submit(test);
+	auto g= Threadpool::instance().submit(test);
+   
+}
